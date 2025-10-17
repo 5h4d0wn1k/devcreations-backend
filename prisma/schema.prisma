@@ -1,0 +1,105 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model OTP {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  otp       String
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+
+  @@map("otps")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String?
+  expiry    Int      @default(dbgenerated("extract(epoch from (now() + interval '1 hour'))::int"))
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+
+  // Relations
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model UserType {
+  id        String   @id @default(cuid())
+  name      String   @default("user")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  isActive  Boolean  @default(true)
+
+  users User[]
+
+  @@map("user_type")
+}
+
+model User {
+  id                String   @id @default(cuid())
+  firstName         String
+  lastName          String
+  phone             String?
+  email             String   @unique
+  password          String
+  address           String?
+  userTypeId        String
+  bankName          String?
+  bankIfscCode      String?
+  bankAccountNumber String?
+  bankAddress       String?
+  isActive          Boolean  @default(true)
+  picture           String?
+  isDeleted         Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Relations
+  userType   UserType     @relation(fields: [userTypeId], references: [id])
+  sessions   Session[]
+  userAccess UserAccess[]
+  modules    Module[]
+
+  @@map("users")
+}
+
+model Module {
+  id          String   @id @default(cuid())
+  name        String
+  parentId    String?
+  toolTip     String?
+  description String?
+  urlSlug     String?
+  userId      String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  isActive    Boolean  @default(true)
+
+  user       User         @relation(fields: [userId], references: [id])
+  userAccess UserAccess[]
+
+  @@map("modules")
+}
+
+model UserAccess {
+  id        String   @id @default(cuid())
+  moduleId  String
+  userId    String
+  createdBy String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  isActive  Boolean  @default(true)
+
+  module Module @relation(fields: [moduleId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@map("user_access")
+}
