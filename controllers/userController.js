@@ -111,11 +111,15 @@ export const loginUser = async (req, res, next) => {
       expiry: Math.round(Date.now() / 1000) + 60 * 60,
     });
 
+//remove sameSite and secure if domain is same
     res.cookie("sid", session.id, {
       httpOnly: true,
       signed: true,
+      sameSite: none,
+      secure: true,
       maxAge: 60 * 1000 * 60 * 24 * 7,
     });
+
 
     res.status(200).json({
       message: "Logged in",
