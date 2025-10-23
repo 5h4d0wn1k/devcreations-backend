@@ -21,8 +21,8 @@ app.use(
   })
 );
 
-app.get("/health", (req, res) => {
-  res.send("itsrunning")
+app.get("/", (req, res) => {
+  res.json({message: "app is running fine"});
 })
 
 app.use(cookieParser(mySecretKey));
