@@ -15,6 +15,8 @@ import {
   getModuleById,
   updateModule,
   deactivateModule,
+  hardDeleteModule,
+  bulkUpdateModules,
   getUserModules,
   assignModuleToUser,
   unassignModuleFromUser,
@@ -90,6 +92,8 @@ router.get("/admin/modules", adminLimiter, CheckAuth, isAdminOrManager, getAllMo
 router.get("/admin/modules/:id", adminLimiter, CheckAuth, isAdminOrManager, getModuleById);
 router.put("/admin/modules/:id", adminLimiter, CheckAuth, isAdmin, validateRequest(updateModuleSchema), updateModule);
 router.patch("/admin/modules/:id/deactivate", adminLimiter, CheckAuth, isAdmin, deactivateModule);
+router.delete("/admin/modules/:id", adminLimiter, CheckAuth, isAdmin, hardDeleteModule);
+router.post("/admin/modules/bulk-update", adminLimiter, CheckAuth, isAdmin, bulkUpdateModules);
 
 // Roles & permissions assignment endpoints
 router.get("/admin/users/:userId/modules", adminLimiter, CheckAuth, isAdminOrManager, getUserModules);

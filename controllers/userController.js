@@ -5,24 +5,27 @@ import { sendOtpService } from "../services/sendOtpService.js";
 import OTP from "../models/otpModel.js";
 import { verifyToken } from "../services/googleAuthService.js";
 import { randomUUID } from "crypto";
+import { logActivity, directActivityLoggers } from "../middlewares/activityLoggerMiddleware.js";
+import { asyncErrorHandler, handleDatabaseError, handleAuthError } from "../middlewares/errorHandlerMiddleware.js";
 
-export const createUser = async (req, res, next) => {
+export const createUser = asyncErrorHandler(async (req, res) => {
   const { firstName, lastName, email, password, otp } = req.body;
-  if (!firstName && !lastName && !email && !password)
-    return res.status(400).json({ message: "All fileds are required!" });
+
+  if (!firstName || !lastName || !email || !password)
+    return res.status(400).json({ message: "All fields are required!" });
 
   try {
     const otpRecord = await OTP.findOne({ email, otp });
 
-    if (!otpRecord)
+    if (!otpRecord) {
       return res.status(401).json({
         error: "Invalid or Expired OTP",
       });
+    }
 
     await OTP.deleteByEmail(email);
 
     const users = await User.find();
-    console.log(users.length);
 
     if(users.length===0){
       const userType = await UserType.create({
@@ -63,12 +66,12 @@ export const createUser = async (req, res, next) => {
         error: "Email already exists!",
       });
     } else {
-      next(error);
+      throw handleDatabaseError(error, req);
     }
   }
-};
+});
 
-export const loginUser = async (req, res, next) => {
+export const loginUser = asyncErrorHandler(async (req, res) => {
   const { email, password, otp } = req.body;
 
   try {
@@ -108,29 +111,59 @@ export const loginUser = async (req, res, next) => {
 
     const session = await Session.create({
       userId: user.id,
-      expiry: Math.round(Date.now() / 1000) + 60 * 60,
+      expiry: Math.round(Date.now() / 1000) + 60 * 60 * 8,
     });
 
-//remove sameSite and secure if domain is same
     res.cookie("sid", session.id, {
       httpOnly: true,
       signed: true,
-      sameSite: none,
+      sameSite: 'lax',
       secure: true,
       maxAge: 60 * 1000 * 60 * 24 * 7,
     });
 
+    // Log login activity
+    await directActivityLoggers.userLogin(user.id, email);
 
-    res.status(200).json({
-      message: "Logged in",
-    });
+    const userType = await UserType.findById(user.userTypeId);
+
+    const responseData = {
+      user: {
+        id: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phone: user.phone || '',
+        address: user.address || '',
+        userTypeId: user.userTypeId,
+        isActive: user.isActive,
+        picture: user.picture,
+        isDeleted: user.isDeleted,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+        userType: {
+          id: userType.id,
+          name: userType.name,
+          createdAt: userType.createdAt,
+          updatedAt: userType.updatedAt,
+          isActive: userType.isActive
+        }
+      },
+      session: {
+        id: session.id,
+        userId: session.userId,
+        expiry: session.expiry,
+        createdAt: session.createdAt
+      }
+    };
+
+    res.status(200).json(responseData);
   } catch (error) {
-    console.log(error);
-    next(error);
+    throw handleAuthError(error, req);
   }
-};
+});
 
-export const createNewPassword = async (req, res, next) => {
+export const createNewPassword = asyncErrorHandler(async (req, res) => {
   const { email, newPassword, otp } = req.body;
   try {
     const otpRecord = await OTP.findOne({ email, otp });
@@ -165,15 +198,18 @@ export const createNewPassword = async (req, res, next) => {
       password: newPassword,
     });
 
+    // Log password change activity
+    await directActivityLoggers.passwordChanged(user.id);
+
     return res.status(201).json({
       message: "Password reset successfully!",
     });
   } catch (error) {
-    next(error);
+    throw handleDatabaseError(error, req);
   }
-};
+});
 
-export const getUserDetails = async (req, res) => {
+export const getUserDetails = asyncErrorHandler(async (req, res) => {
   const userType = await UserType.findById(req.user.userTypeId);
   return res.status(200).json({
     firstName: req.user.firstName,
@@ -182,21 +218,26 @@ export const getUserDetails = async (req, res) => {
     picture: req.user.picture,
     userType: userType.name,
   });
-};
+});
 
-export const logoutUser = async (req, res) => {
+export const logoutUser = asyncErrorHandler(async (req, res) => {
   const sessionId = req.signedCookies.sid;
-  try {
-    await Session.deleteById(sessionId);
-  } catch (error) {
-    console.log(error);
+  if (sessionId) {
+    try {
+      await Session.deleteById(sessionId);
+    } catch (error) {
+      // Log error silently or use proper logging
+    }
   }
+
+  // Log logout activity before clearing cookie
+  await directActivityLoggers.userLogout(req.user?.id);
 
   res.clearCookie("sid");
   res.status(200).end();
-};
+});
 
-export const logouAll = async (req, res) => {
+export const logouAll = asyncErrorHandler(async (req, res) => {
   const sessionId = req.signedCookies.sid;
   try {
     const session = await Session.findById(sessionId);
@@ -208,23 +249,22 @@ export const logouAll = async (req, res) => {
       });
     }
   } catch (error) {
-    console.log(error);
+    // Log error silently or use proper logging
   }
 
   res.clearCookie("sid");
   res.status(200).end();
-};
+});
 
-export const sendOtp = async (req, res, next) => {
+export const sendOtp = asyncErrorHandler(async (req, res) => {
   const { email } = req.body;
-  console.log(email);
   await sendOtpService(email);
   res.status(201).json({
     message: "OTP sent successfully",
   });
-};
+});
 
-export const verifyOtp = async (req, res, next) => {
+export const verifyOtp = asyncErrorHandler(async (req, res) => {
   const { email, otp } = req.body;
 
   const otpRecord = await OTP.findOne({ email, otp });
@@ -237,9 +277,9 @@ export const verifyOtp = async (req, res, next) => {
   res.status(201).json({
     message: "OTP verification successful",
   });
-};
+});
 
-export const loginWithGoogle = async (req, res, next) => {
+export const loginWithGoogle = asyncErrorHandler(async (req, res) => {
   const { idToken } = req.body;
 
   if (!idToken)
@@ -267,14 +307,19 @@ export const loginWithGoogle = async (req, res, next) => {
 
       const session = await Session.create({
         userId: user.id,
-        expiry: Math.round(Date.now() / 1000) + 60 * 60,
+        expiry: Math.round(Date.now() / 1000) + 60 * 60 * 8,
       });
 
       res.cookie("sid", session.id, {
         httpOnly: true,
         signed: true,
+        sameSite: 'lax',
+        secure: true,
         maxAge: 60 * 1000 * 60 * 24 * 7,
       });
+
+      // Log login activity
+      await directActivityLoggers.userLogin(user.id, email);
 
       return res.status(200).json({
         message: "Login successfully!",
@@ -296,14 +341,20 @@ export const loginWithGoogle = async (req, res, next) => {
 
       const setSession = await Session.create({
         userId: user.id,
-        expiry: Math.round(Date.now() / 1000) + 60 * 60,
+        expiry: Math.round(Date.now() / 1000) + 60 * 60 * 8,
       });
 
       res.cookie("sid", setSession.id, {
         httpOnly: true,
         signed: true,
+        sameSite: 'lax',
+        secure: true,
         maxAge: 60 * 1000 * 60 * 24 * 7,
       });
+
+      // Log user creation and login activity
+      await logActivity('user_created', `User ${name} was created`, user.id, { email });
+      await directActivityLoggers.userLogin(user.id, email);
 
       return res.status(201).json({
         success: true,
@@ -316,7 +367,7 @@ export const loginWithGoogle = async (req, res, next) => {
         error: "Email already exists!",
       });
     } else {
-      next(error);
+      throw handleDatabaseError(error, req);
     }
   }
-};
+});

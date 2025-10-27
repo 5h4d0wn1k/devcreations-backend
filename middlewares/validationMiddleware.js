@@ -117,7 +117,6 @@ export const validateRequest = (schema) => {
       schema.parse(req.body);
       next();
     } catch (error) {
-      console.log("from ",error.message);
       return res.status(400).json({
         error: "Validation failed",
         details:  error.message

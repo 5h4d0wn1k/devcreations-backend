@@ -3,8 +3,10 @@ import User from "../models/userModel.js";
 import Module from "../models/moduleModel.js";
 import UserAccess from "../models/userAccessModel.js";
 import UserType from "../models/userTypeModel.js";
+import { userActivityLoggers } from "../middlewares/activityLoggerMiddleware.js";
+import { asyncErrorHandler, handleDatabaseError, handleAuthError } from "../middlewares/errorHandlerMiddleware.js";
 
-export const getAllUsers = async (req, res, next) => {
+export const getAllUsers = asyncErrorHandler(async (req, res, next) => {
   try {
     const users = await User.find();
     const sessions = await Session.find();
@@ -28,7 +30,7 @@ export const getAllUsers = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-};
+});
 
 export const logoutUserByAdmin = async (req, res, next) => {
   const { id } = req.params;
@@ -53,7 +55,6 @@ export const logoutUserByAdmin = async (req, res, next) => {
 
     return res.status(200).end();
   } catch (error) {
-    console.log(error.message);
     next(error);
   }
 };
@@ -80,6 +81,9 @@ export const deleteUserByAdmin = async (req, res, next) => {
     await Session.find({ userId: id }).then(sessions => {
       sessions.forEach(session => Session.deleteById(session.id));
     });
+
+    // Log user deletion activity
+    await userActivityLoggers.userDeleted(req, res);
 
     return res.status(200).json({
       message: "User deleted successfully!",
@@ -158,6 +162,9 @@ export const changeUserRole = async (req, res, next) => {
     }
 
     await User.updateById(id, { userTypeId: newUserType.id });
+
+    // Log permission change activity
+    await userActivityLoggers.permissionChanged(req, res);
 
     return res.status(201).end();
   } catch (error) {
@@ -324,7 +331,6 @@ export const updateUser = async (req, res, next) => {
 };
 
 export const createModule = async (req, res, next) => {
-  console.log(req.body);
   try {
     const { name, parentId, urlSlug, toolTip, description, isActive } = req.body;
 
@@ -356,6 +362,9 @@ export const createModule = async (req, res, next) => {
 
     const newModule = await Module.create(moduleData);
 
+    // Log module creation activity
+    await userActivityLoggers.moduleCreated(req, res);
+
     return res.status(201).json({
       message: "Module created successfully",
       module: {
@@ -385,9 +394,37 @@ export const getAllModules = async (req, res, next) => {
       description: module.description,
       isActive: module.isActive
     }));
-    return res.status(200).json(modulesData);
+
+    // Build hierarchical structure
+    const buildTree = (modules) => {
+      const moduleMap = new Map();
+      const roots = [];
+
+      // Create map of all modules
+      modules.forEach(module => {
+        moduleMap.set(module.id, { ...module, children: [] });
+      });
+
+      // Build tree
+      modules.forEach(module => {
+        const moduleWithChildren = moduleMap.get(module.id);
+        if (module.parentId) {
+          const parent = moduleMap.get(module.parentId);
+          if (parent) {
+            parent.children.push(moduleWithChildren);
+          }
+        } else {
+          roots.push(moduleWithChildren);
+        }
+      });
+
+      return roots;
+    };
+
+    const hierarchicalModules = buildTree(modulesData);
+    return res.status(200).json(hierarchicalModules);
   } catch (error) {
-    next(error);
+    throw handleDatabaseError(error, req);
   }
 };
 
@@ -445,6 +482,9 @@ export const updateModule = async (req, res, next) => {
 
     const updatedModule = await Module.updateById(id, updateData);
 
+    // Log module update activity
+    await userActivityLoggers.moduleUpdated(req, res);
+
     return res.status(200).json({
       message: "Module updated successfully",
       module: {
@@ -472,8 +512,116 @@ export const deactivateModule = async (req, res, next) => {
 
     await Module.updateById(id, { isActive: false });
 
+    // Log module deactivation activity
+    await userActivityLoggers.moduleDeactivated(req, res);
+
     return res.status(200).json({
       message: "Module deactivated successfully"
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const hardDeleteModule = async (req, res, next) => {
+  const { id } = req.params;
+
+  try {
+    const module = await Module.findById(id);
+    if (!module) {
+      return res.status(404).json({ error: "Module not found" });
+    }
+
+    // Check if module has children
+    const children = await Module.find({ parentId: id });
+    if (children.length > 0) {
+      return res.status(400).json({ error: "Cannot delete module with child modules" });
+    }
+
+    // Check if module is assigned to any users
+    const userAccesses = await UserAccess.find({ moduleId: id });
+    if (userAccesses.length > 0) {
+      return res.status(400).json({ error: "Cannot delete module assigned to users" });
+    }
+
+    await Module.deleteById(id);
+
+    // Log module deletion activity
+    await userActivityLoggers.moduleDeleted(req, res);
+
+    return res.status(200).json({
+      message: "Module deleted successfully"
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const bulkUpdateModules = async (req, res, next) => {
+  const { moduleIds, action, isActive } = req.body;
+
+  if (!Array.isArray(moduleIds) || moduleIds.length === 0) {
+    return res.status(400).json({ error: "Missing required fields: moduleIds (array)" });
+  }
+
+  if (action !== 'activate' && action !== 'deactivate' && action !== 'delete') {
+    return res.status(400).json({ error: "Invalid action. Must be 'activate', 'deactivate', or 'delete'" });
+  }
+
+  try {
+    // Validate all modules exist
+    const modules = await Module.find({ id: { in: moduleIds } });
+    if (modules.length !== moduleIds.length) {
+      return res.status(400).json({ error: "One or more modules not found" });
+    }
+
+    let updateData = {};
+    let successMessage = "";
+    let activityLogger = null;
+
+    switch (action) {
+      case 'activate':
+        updateData = { isActive: true };
+        successMessage = `${modules.length} modules activated successfully`;
+        activityLogger = userActivityLoggers.moduleActivated;
+        break;
+      case 'deactivate':
+        updateData = { isActive: false };
+        successMessage = `${modules.length} modules deactivated successfully`;
+        activityLogger = userActivityLoggers.moduleDeactivated;
+        break;
+      case 'delete':
+        // Check constraints for deletion
+        for (const moduleId of moduleIds) {
+          const children = await Module.find({ parentId: moduleId });
+          if (children.length > 0) {
+            return res.status(400).json({ error: `Cannot delete module ${moduleId} with child modules` });
+          }
+          const userAccesses = await UserAccess.find({ moduleId });
+          if (userAccesses.length > 0) {
+            return res.status(400).json({ error: `Cannot delete module ${moduleId} assigned to users` });
+          }
+        }
+        // Perform hard delete
+        await Promise.all(moduleIds.map(id => Module.deleteById(id)));
+        successMessage = `${modules.length} modules deleted successfully`;
+        activityLogger = userActivityLoggers.moduleDeleted;
+        break;
+    }
+
+    if (action !== 'delete') {
+      // Update multiple modules
+      await Promise.all(moduleIds.map(id => Module.updateById(id, updateData)));
+    }
+
+    // Log bulk activity
+    if (activityLogger) {
+      await activityLogger(req, res);
+    }
+
+    return res.status(200).json({
+      message: successMessage,
+      affectedModules: moduleIds.length
     });
   } catch (error) {
     next(error);
@@ -539,6 +687,9 @@ export const assignModuleToUser = async (req, res, next) => {
     };
 
     const newAccess = await UserAccess.create(accessData);
+
+    // Log module assignment activity
+    await userActivityLoggers.moduleAssigned(req, res);
 
     return res.status(201).json({
       message: "Module assigned to user successfully",
@@ -675,7 +826,6 @@ export const createUserType = async (req, res, next) => {
 export const getAllUserTypes = async (req, res, next) => {
   try {
     const userTypes = await UserType.find();
-    console.log(userTypes)
     const userTypesData = userTypes.map(userType => ({
       id: userType.id,
       name: userType.name,

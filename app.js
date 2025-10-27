@@ -1,11 +1,14 @@
 import express from "express";
 import userRoutes from "./routes/userRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
+import activityRoutes from "./routes/activityRoutes.js";
+import dashboardRoutes from "./routes/dashboardRoutes.js";
 import cors from "cors";
 import { CheckAuth } from "./middlewares/authMiddleware.js";
 import { connectDB } from "./config/db.js";
 import cookieParser from "cookie-parser";
 import { generalLimiter } from "./middlewares/rateLimitMiddleware.js";
+import { errorHandler } from "./middlewares/errorHandlerMiddleware.js";
 
 await connectDB();
 
@@ -35,13 +38,12 @@ app.use("/", userRoutes);
 
 app.use("/", adminRoutes);
 
+app.use("/", activityRoutes);
 
-app.use((err, req, res, next) => {
-  console.log(err);
-  return res.status(err.status || 500).json({
-    error: "Something went wrong",
-  });
-});
+app.use("/", dashboardRoutes);
+
+// Global error handler - must be last
+app.use(errorHandler);
 
 app.listen(port, () => {
   console.log("Server is running on port 4000");

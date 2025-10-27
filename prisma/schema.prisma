@@ -14,6 +14,7 @@ model OTP {
   id        String   @id @default(cuid())
   email     String   @unique
   otp       String
+  expiry    DateTime @default(dbgenerated("now() + interval '5 minutes'"))
   createdAt DateTime @default(now()) @db.Timestamp(6)
 
   @@map("otps")
@@ -22,7 +23,7 @@ model OTP {
 model Session {
   id        String   @id @default(cuid())
   userId    String?
-  expiry    Int      @default(dbgenerated("extract(epoch from (now() + interval '1 hour'))::int"))
+  expiry    Int      @default(dbgenerated("extract(epoch from (now() + interval '8 hours'))::int"))
   createdAt DateTime @default(now()) @db.Timestamp(6)
 
   // Relations
@@ -67,6 +68,7 @@ model User {
   sessions   Session[]
   userAccess UserAccess[]
   modules    Module[]
+  activities Activity[]
 
   @@map("users")
 }
@@ -102,4 +104,17 @@ model UserAccess {
   user   User   @relation(fields: [userId], references: [id])
 
   @@map("user_access")
+}
+
+model Activity {
+  id          String   @id @default(cuid())
+  type        String   // e.g., 'user_created', 'user_updated', 'login', etc.
+  description String
+  userId      String?
+  timestamp   DateTime @default(now())
+  metadata    Json?    // Additional data like affected user ID, etc.
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("activities")
 }
